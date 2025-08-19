@@ -46,6 +46,7 @@ def create_claim():
                 }), 400
 
             result = validate_Duplicate_Claim(policy_number, cleaned_text)
+            print ("Result:", result)
 
             if result is None or result.get("status") == "new":
                 return attempt_claim_creation(cleaned_text, policy_details, policy_number)
@@ -251,7 +252,7 @@ Policy Details:
     # Extract JSON from the AI response
     extracted_json = extract_json_from_response(response)
 
-    print(json.dumps(extracted_json, indent=2))
+    #print(json.dumps(extracted_json, indent=2))
     return extracted_json
 
 
@@ -327,7 +328,7 @@ def createClaim(response):
 
     response = requests.request("POST", url, headers=headers, data=payload)
 
-    print(response.text)
+    #print(response.text)
     return response
 
 def extract_policy_details(text):
@@ -338,11 +339,11 @@ def extract_policy_details(text):
     # Extract policy number using regex
     match = re.search(r'"PolicyNumber":\s*"(\d+)"', policy)
     if not match:
-        print("Policy Number not found.")
+        #print("Policy Number not found.")
         return None
 
     policy_number = match.group(1)
-    print("Extracted Policy Number:", policy_number)
+    #print("Extracted Policy Number:", policy_number)
 
     # Prepare API request
     url = "http://18.218.57.115:8190/pc/rest/policy/v1/latestDetailsBasedOnAccOrPocNo"
@@ -358,11 +359,11 @@ def extract_policy_details(text):
         response = requests.post(url, headers=headers, data=payload)
         response.raise_for_status()  # Raises an exception for HTTP 4xx/5xx
 
-        print("Response Received:\n", response.text)
+        #print("Response Received:\n", response.text)
         return response.text,policy_number
 
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching policy details: {e}")
+        #print(f"Error fetching policy details: {e}")
         return None, policy_number
 
 
@@ -377,9 +378,9 @@ def validate_Duplicate_Claim(policy_number, cleaned_text):
     - Returns dict with policyNumber, claimNumber, lossDate, and status='found' if found, else None.
     """
     try:
-        print("\n[DEBUG] Starting duplicate claim validation...")
-        print(f"[DEBUG] Input Policy Number: {policy_number}")
-        print(f"[DEBUG] Cleaned Text (truncated): {cleaned_text[:200]}...")  # Avoid printing huge text
+        #print("\n[DEBUG] Starting duplicate claim validation...")
+        #print(f"[DEBUG] Input Policy Number: {policy_number}")
+        #print(f"[DEBUG] Cleaned Text (truncated): {cleaned_text[:200]}...")  # Avoid printing huge text
 
         # 1️⃣ API Endpoint & Headers
         url = "http://18.218.57.115:8090/cc/rest/claimdetails/v1/getClaimDetails"
@@ -390,22 +391,19 @@ def validate_Duplicate_Claim(policy_number, cleaned_text):
         payload = {
             "PolicyNumber": str(policy_number)
         }
-        print(f"[DEBUG] API URL: {url}")
-        print(f"[DEBUG] Request Payload: {payload}")
+     
 
         response = requests.post(url, headers=headers, data=json.dumps(payload))
-        print(f"[DEBUG] API Status Code: {response.status_code}")
 
         if response.status_code != 200:
-            print(f"[ERROR] Get Claim API failed: {response.status_code} - {response.text}")
+           # print(f"[ERROR] Get Claim API failed: {response.status_code} - {response.text}")
             return None
 
         try:
             claim_data = response.json()
-            print(f"[DEBUG] API Response JSON: {json.dumps(claim_data, indent=2)}")
+           
         except Exception as e:
-            print(f"[ERROR] Failed to parse API response as JSON: {e}")
-            print(f"[DEBUG] Raw Response: {response.text}")
+            
             return None
 
         # 2️⃣ Quick check before AI
@@ -415,50 +413,61 @@ def validate_Duplicate_Claim(policy_number, cleaned_text):
 
         # 3️⃣ Build AI prompt
         prompt = f"""
-You are an insurance assistant.
-Given the following claim data from the API:
-{json.dumps(claim_data)}
+You are an professional claim validator. 
+You must strictly follow the instructions.
 
-The user provided the following request text:
+Claim data from the API:
+{claim_data}
+
+User request text:
 {cleaned_text}
 
-Your task:
-1. Extract the VIN and loss date from the user request text.
-2. Compare them with the VIN and loss date in the claim data from the API.
-3. If both VIN and loss date match, return ONLY this JSON:
-{{
-    "policyNumber": "<policy>",
-    "claimNumber": "<claim>",
-    "lossDate": "<date>",
-    "claimStatus": "<status>",
-    "status": "duplicate"
-}}
-4. If they do not match, return ONLY this JSON:
-{{
-    "status": "new"
-}}
+### Your Task:
+1. Extract the **Policy Number** and **Loss Date** from {cleaned_text}.    
+   - Loss Date: normalize it to this format → YYYY-MM-DDTHH:MM:SS-07:00  
+     (example: 2025-07-14T15:30:00-07:00). If time is missing, assume 00:00:00.  
+
+2. Here is the List of previous claim data {claim_data}. I want you to go through it thoroughly,verify if the 
+claim is created on the same loss date as above and the claim status is "open". If found, extract the details of the latest claim as follows, return ONLY this JSON:  
+   {{
+       "policyNumber": "<policyNumber from API>",
+       "claimNumber": "<claimNumber from API>",
+       "lossDate": "<lossDate from API>",
+       "claimStatus": "<claimStatus from API>",
+       "status": "duplicate"
+   }}
+
+4. If Duplicate Claim is not found then return ONLY this JSON:  
+   {{
+       "status": "new"
+   }}
+
+### Rules:
+- Do not explain your reasoning.  
+- Do not output anything other than the JSON.  
 """
-        print(f"[DEBUG] AI Prompt (truncated): {prompt[:500]}...")
+
 
         # 4️⃣ Call AI
+       
         ai_result = get_ai_content(prompt)
-        print(f"[DEBUG] Raw AI Result: {ai_result}")
+        
 
         # 🛠 Clean AI output before parsing
         try:
             import re
             cleaned_ai_result = re.sub(r"^```[a-zA-Z]*\s*|```$", "", ai_result.strip(), flags=re.MULTILINE).strip()
-            print(f"[DEBUG] Cleaned AI Result: {cleaned_ai_result}")
+            # print(f"[DEBUG] Cleaned AI Result: {cleaned_ai_result}")
             result_json = json.loads(cleaned_ai_result)
-            print(f"[DEBUG] Parsed AI JSON: {result_json}")
+            # print(f"[DEBUG] Parsed AI JSON: {result_json}")
         except Exception as e:
-            print(f"[ERROR] Failed to parse AI output as JSON after cleaning: {e}")
+            #print(f"[ERROR] Failed to parse AI output as JSON after cleaning: {e}")
             result_json = None
 
         return result_json
 
     except Exception as e:
-        print(f"[ERROR] Exception in validate_Duplicate_Claim: {e}")
+        #print(f"[ERROR] Exception in validate_Duplicate_Claim: {e}")
         return None
 
 
