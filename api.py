@@ -423,26 +423,30 @@ User request text:
 {cleaned_text}
 
 ### Your Task:
-1. Extract the **Policy Number** and **Loss Date** from {cleaned_text}.    
-   - Loss Date: normalize it to this format → YYYY-MM-DDTHH:MM:SS-07:00  
+1. Extract the **Loss Date** from {cleaned_text} and lets name as "RequestLossDate"   
+
+   RequestLossDate =  Loss Date: normalize it to this format → YYYY-MM-DDTHH:MM:SS-07:00  
      (example: 2025-07-14T15:30:00-07:00). If time is missing, assume 00:00:00.  
 
 2. Here is the List of previous claim data {claim_data}. I want you to go through it thoroughly,verify if the 
-claim is created on the same loss date as above and the claim status is "open". If found, extract the details of the latest claim as follows, return ONLY this JSON:  
-   {{
+claim data has a claim details having "lossDate" = RequestLossDate. If found,
+extract the details of the latest claim as follows, return ONLY this JSON:  
+  
+    {{
        "policyNumber": "<policyNumber from API>",
        "claimNumber": "<claimNumber from API>",
        "lossDate": "<lossDate from API>",
        "claimStatus": "<claimStatus from API>",
        "status": "duplicate"
    }}
-
+3. Do not mark the status as duplicate if the loss Date is different.
 4. If Duplicate Claim is not found then return ONLY this JSON:  
    {{
        "status": "new"
    }}
 
 ### Rules:
+
 - Do not explain your reasoning.  
 - Do not output anything other than the JSON.  
 """
