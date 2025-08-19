@@ -42,8 +42,9 @@ def create_claim():
                 return jsonify({
                     "claimNumber": None,
                     "policyNumber": policy_number,
-                    "message": "Policy Number is Invalid or Policy Does Not Exist"
-                }), 400
+                    "message": "Policy Number is Invalid or Policy Does Not Exist",
+                    "action": "InvalidPolicy"
+                }), 200
 
             result = validate_Duplicate_Claim(policy_number, cleaned_text)
             print ("Result:", result)
@@ -58,8 +59,9 @@ def create_claim():
                     "claimNumber": result.get("claimNumber"),
                     "lossDate": result.get("lossDate"),
                     "claimStatus": result.get("claimStatus"),
-                    "message": "Duplicate Claim Found"
-                }), 409
+                    "message": "Duplicate Claim Found",
+                    "action": "DuplicateClaim"
+                }), 200
 
         # 3️⃣ Follow-up Conversation
         else:
@@ -74,13 +76,15 @@ def create_claim():
                         return jsonify({
                             "claimNumber": None,
                             "policyNumber": policy_number,
-                            "message": "Policy Number is Invalid or Policy Does Not Exist"
-                        }), 400
+                            "message": "Policy Number is Invalid or Policy Does Not Exist",
+                            "action": "InvalidPolicy"
+                        }), 200
                     return attempt_claim_creation(body, policy_details, policy_number)
 
             return jsonify({
                 "message": "No claim action required for this email"
-            }), 204
+                "action": "None"
+            }), 200
 
     except Exception as e:
         return jsonify({
@@ -105,6 +109,7 @@ def attempt_claim_creation(cleaned_text, policy_details, policy_number):
                 "claimNumber": claim_number,
                 "policyNumber": policy_number,
                 "message": "Claim Created Successfully"
+                "action": "ClaimCreated"
             }), 200
 
     return jsonify({
