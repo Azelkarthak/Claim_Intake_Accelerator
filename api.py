@@ -82,7 +82,7 @@ def create_claim():
                     return attempt_claim_creation(body, policy_details, policy_number)
 
             return jsonify({
-                "message": "No claim action required for this email"
+                "message": "No claim action required for this email",
                 "action": "NotRequired"
             }), 200
 
