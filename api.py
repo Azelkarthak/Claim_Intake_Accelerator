@@ -108,7 +108,7 @@ def attempt_claim_creation(cleaned_text, policy_details, policy_number):
             return jsonify({
                 "claimNumber": claim_number,
                 "policyNumber": policy_number,
-                "message": "Claim Created Successfully"
+                "message": "Claim Created Successfully",
                 "action": "ClaimCreated"
             }), 200
 
