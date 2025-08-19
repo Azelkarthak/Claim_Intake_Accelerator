@@ -83,7 +83,7 @@ def create_claim():
 
             return jsonify({
                 "message": "No claim action required for this email"
-                "action": "None"
+                "action": "NotRequired"
             }), 200
 
     except Exception as e:
