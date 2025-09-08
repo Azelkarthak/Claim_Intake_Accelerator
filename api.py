@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify, render_template, send_file
 from model import get_ai_content
 import html
 import requests
-from utils import get_email_intent
+from utils import get_email_intent,verify_policy_details
 from dbOperations import init_db, store_conversation, get_conversation_body, validate_conversation_id
 
 # Create Flask app
@@ -26,7 +26,7 @@ def create_claim():
         if not conversation_id and request.is_json:
             conversation_id = request.json.get("ConversationID")
         
-        # 1️⃣ Extract email content
+        # Extract and clean HTML content
         html_content = request.get_data(as_text=True)
         print("Received HTML Content:", html_content)
         soup = BeautifulSoup(html_content, "html.parser")
@@ -35,8 +35,10 @@ def create_claim():
         cleaned_text = re.sub(r'(\\n|/n|\n|\r)', ' ', decoded_text)
         cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
 
-        # 2️⃣ New Conversation
+        # Create a new Claim for a policy
         if not validate_conversation_id(conversation_id):
+
+            # Calling the extract policy details function to get the policy details and verify the policy number
             policy_details, policy_number = extract_policy_details(cleaned_text)
             if policy_details is None:
                 return jsonify({
@@ -45,9 +47,20 @@ def create_claim():
                     "message": "Policy Number is Invalid or Policy Does Not Exist",
                     "action": "InvalidPolicy"
                 }), 200
-
+            
+            # Function to verify if the policy is expired or not using the policy details
+            policy_status, policy_type = verify_policy_details(policy_details)
+            if policy_status =="Expired":
+                return jsonify({
+                    "claimNumber": None,
+                    "policyNumber": policy_number,
+                    "message": "Policy is Expired",
+                    "action": "PolicyExpired"
+                }), 200
+            
+            # Function to check if duplicate claim exists using Gen AI
             result = validate_Duplicate_Claim(policy_number, cleaned_text)
-            print ("Result:", result)
+            
 
             if result is None or result.get("status") == "new":
                 return attempt_claim_creation(cleaned_text, policy_details, policy_number)
@@ -63,11 +76,12 @@ def create_claim():
                     "action": "DuplicateClaim"
                 }), 200
 
-        # 3️⃣ Follow-up Conversation
+        # Follow-up email in an existing conversation
         else:
-            email_intent = get_email_intent(cleaned_text)
-            print(f"[DEBUG] Email Intent: {email_intent}")
-            if email_intent == "Proceed":
+            # email_intent = get_email_intent(cleaned_text)
+            # print(f"[DEBUG] Email Intent: {email_intent}")
+            # if email_intent == "Proceed":
+            if "proceed" in cleaned_text.lower():
                 body = get_conversation_body(conversation_id)
                 print("[DEBUG] Retrieved body for FollowUp:", body)
                 if body:
@@ -79,6 +93,16 @@ def create_claim():
                             "message": "Policy Number is Invalid or Policy Does Not Exist",
                             "action": "InvalidPolicy"
                         }), 200
+                    
+                    policy_status, policy_type = verify_policy_details(policy_details)
+                    if policy_status =="Expired":
+                        return jsonify({
+                            "claimNumber": None,
+                            "policyNumber": policy_number,
+                            "message": "Policy is Expired",
+                            "action": "PolicyExpired"
+                         }), 200
+                    
                     return attempt_claim_creation(body, policy_details, policy_number)
 
             return jsonify({
@@ -135,7 +159,7 @@ Your job is to extract structured data from the user's claim description and pop
 
 ---
 
-📌 Master Data (use ONLY these values exactly):
+Master Data (use ONLY these values exactly):
 
 ClaimantType:
 - insured
@@ -191,7 +215,7 @@ LossCause:
 
 ---
 
-🧠 Context:
+Context:
 
 You will receive:
 - A **free-text claim description** (from user or email).
@@ -199,7 +223,7 @@ You will receive:
 
 ---
 
-📋 Instructions:
+Instructions:
 
 1. **Extract structured data** only when confidently inferable.
 2. **Leave fields blank or omit them entirely** if data is missing or uncertain.
@@ -233,7 +257,7 @@ You will receive:
 
 ---
 
-🎯 Output:
+Output:
 Return only a valid, structured JSON object with human-readable formatting. No explanation text. Do not hallucinate missing details.
 
 Claim Information:
@@ -244,7 +268,7 @@ Policy Details:
 
 ---
 
-🎯 Fill out the below template using only values inferred from the above:
+Fill out the below template using only values inferred from the above:
 {claim_template}
 """
 
@@ -259,52 +283,6 @@ Policy Details:
 
     #print(json.dumps(extracted_json, indent=2))
     return extracted_json
-
-
-# def get_ai_content(
-#     prompt,
-#     max_retries=3,
-#     base_delay=2,
-#     temperature=0.0,
-#     top_p=0.95,
-#     top_k=40,
-#     minimum_output_tokens=2000
-# ):
-#     retry_count = 0
-
-#     while retry_count <= max_retries:
-#         try:
-#             model = genai.GenerativeModel("gemini-2.0-flash")
-#             response = model.generate_content(
-#                 contents=prompt,
-#                 generation_config=genai.types.GenerationConfig(
-#                     temperature=temperature
-#                 )
-#             )
-
-#             content_text = response.candidates[0].content.parts[0].text
-
-#             print("\n--- Token Usage ---")
-#             print(f"Prompt Tokens: {response.usage_metadata.prompt_token_count}")
-#             print(f"Response Tokens: {response.usage_metadata.candidates_token_count}")
-#             print(f"Total Tokens: {response.usage_metadata.total_token_count}\n")
-
-#             return content_text
-
-#         except Exception as e:
-#             error_message = str(e)
-#             print(f"Attempt {retry_count + 1}: Error generating AI content: {error_message}")
-
-#             if "503" in error_message or "UNAVAILABLE" in error_message.upper():
-#                 retry_count += 1
-#                 delay = base_delay * (2 ** (retry_count - 1)) + random.uniform(0, 1)
-#                 print(f"Retrying in {delay:.2f} seconds...")
-#                 time.sleep(delay)
-#             else:
-#                 break
-
-#     print("Failed to get a valid response after retries.")
-#     return None
 
 
 def extract_json_from_response(response_data):
@@ -460,7 +438,7 @@ extract the details of the latest claim as follows, return ONLY this JSON:
         # 4️⃣ Call AI
        
         ai_result = get_ai_content(prompt)
-        
+        print("AI Result:", ai_result)
 
         # 🛠 Clean AI output before parsing
         try:
