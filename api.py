@@ -1,3 +1,4 @@
+from email import policy
 import os
 import json
 import random
@@ -7,12 +8,13 @@ from base64 import b64decode
 import json
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify
 from model import get_ai_content
 import html
 import requests
 from utils import get_email_intent,verify_policy_details
 from dbOperations import init_db, store_conversation, get_conversation_body, validate_conversation_id
+from verify import validate_claim
 
 # Create Flask app
 app = Flask(__name__)
@@ -28,7 +30,7 @@ def create_claim():
         
         # Extract and clean HTML content
         html_content = request.get_data(as_text=True)
-        print("Received HTML Content:", html_content)
+        
         soup = BeautifulSoup(html_content, "html.parser")
         plain_text = soup.get_text(separator=" ")
         decoded_text = html.unescape(plain_text)
@@ -38,8 +40,9 @@ def create_claim():
         # Create a new Claim for a policy
         if not validate_conversation_id(conversation_id):
 
-            # Calling the extract policy details function to get the policy details and verify the policy number
-            policy_details, policy_number = extract_policy_details(cleaned_text)
+            # Calling the extract policy details function to get the policy details,
+            #  and extract policy number and loss date using Gen AI
+            policy_details, policy_number, loss_date = extract_policy_details(cleaned_text)
             if policy_details is None:
                 return jsonify({
                     "claimNumber": None,
@@ -59,33 +62,40 @@ def create_claim():
                 }), 200
             
             # Function to check if duplicate claim exists using Gen AI
-            result = validate_Duplicate_Claim(policy_number, cleaned_text)
-            
+            # Uncommenqt the below line and comment the next line to use the old duplicate claim validation function
+            # which uses Gen AI to validate duplicate claims
 
+            # result = validate_Duplicate_Claim(policy_number, cleaned_text)
+            
+            result = validate_claim(policy_number, loss_date)
+            
             if result is None or result.get("status") == "new":
                 return attempt_claim_creation(cleaned_text, policy_details, policy_number)
 
-            elif result.get("status") == "duplicate":
+            elif result.get("Status") == "Duplicate":
                 store_conversation(conversation_id, cleaned_text)
                 return jsonify({
-                    "policyNumber": result.get("policyNumber"),
-                    "claimNumber": result.get("claimNumber"),
-                    "lossDate": result.get("lossDate"),
-                    "claimStatus": result.get("claimStatus"),
+                    "policyNumber": result.get("PolicyNumber"),
+                    "claimNumber": result.get("ClaimNumber"),
+                    "lossDate": result.get("LossDate"),
+                    "claimStatus": result.get("ClaimStatus"),
                     "message": "Duplicate Claim Found",
                     "action": "DuplicateClaim"
                 }), 200
 
         # Follow-up email in an existing conversation
         else:
+
+            # Uncomment below lines to use Gen AI to determine email intent
             # email_intent = get_email_intent(cleaned_text)
             # print(f"[DEBUG] Email Intent: {email_intent}")
             # if email_intent == "Proceed":
+            
             if "proceed" in cleaned_text.lower():
                 body = get_conversation_body(conversation_id)
                 print("[DEBUG] Retrieved body for FollowUp:", body)
                 if body:
-                    policy_details, policy_number = extract_policy_details(body)
+                    policy_details, policy_number, loss_date = extract_policy_details(body)
                     if policy_details is None:
                         return jsonify({
                             "claimNumber": None,
@@ -122,7 +132,6 @@ def attempt_claim_creation(cleaned_text, policy_details, policy_number):
     """Helper to retry claim creation up to 3 times."""
     claim_number = None
     for attempt in range(3):
-        print(f"Attempt {attempt + 1} to create claim...")
         response_payload = generate_response(cleaned_text, policy_details)
         createClaimResponse = createClaim(response_payload)
 
@@ -147,10 +156,6 @@ def generate_response(user_input, policy_details):
     # Load claim template
     with open('claim_template.json', 'r') as f:
         claim_template = json.load(f)
-
-
-    print(f"Policy Details: {policy_details}")
-    print(f"Claim Template: {claim_template}")
 
     prompt = f"""
 You are a professional insurance claim assistant.
@@ -272,7 +277,7 @@ Fill out the below template using only values inferred from the above:
 {claim_template}
 """
 
-    print(f"Prompt: {prompt}")
+    
     response = get_ai_content(prompt)
 
     if not response:
@@ -281,7 +286,7 @@ Fill out the below template using only values inferred from the above:
     # Extract JSON from the AI response
     extracted_json = extract_json_from_response(response)
 
-    #print(json.dumps(extracted_json, indent=2))
+    
     return extracted_json
 
 
@@ -300,6 +305,9 @@ def extract_json_from_response(response_data):
 
 def createClaim(response):
 
+
+    
+
     url = "http://18.218.57.115:8090/cc/rest/fnol/v1/createFNOL"
 
     payload = json.dumps(response)
@@ -311,22 +319,32 @@ def createClaim(response):
 
     response = requests.request("POST", url, headers=headers, data=payload)
 
-    #print(response.text)
+    
     return response
 
 def extract_policy_details(text):
     # Prompt AI to extract the policy number
-    prompt = f"""From the following text, extract the policy details in text format. Eg: "PolicyNumber": "12312312". Do not return anything else.\n\n{text}"""
+    prompt = f"""From the following text, extract the policy details in text format. Eg: "PolicyNumber": "12312312", "LossDate":"2025-07-22T22:30:00.000Z". Do not return anything else.\n\n{text}"""
     policy = get_ai_content(prompt)
+
+    
 
     # Extract policy number using regex
     match = re.search(r'"PolicyNumber":\s*"(\d+)"', policy)
     if not match:
-        #print("Policy Number not found.")
+        
         return None
 
     policy_number = match.group(1)
-    #print("Extracted Policy Number:", policy_number)
+    
+
+    # Extract loss date using regex
+    match_loss_date = re.search(r'"LossDate":\s*"([\d\-T:\.Z]+)"', policy)
+    if not match_loss_date:
+    
+        return None
+
+    loss_date = match_loss_date.group(1)
 
     # Prepare API request
     url = "http://18.218.57.115:8190/pc/rest/policy/v1/latestDetailsBasedOnAccOrPocNo"
@@ -342,123 +360,12 @@ def extract_policy_details(text):
         response = requests.post(url, headers=headers, data=payload)
         response.raise_for_status()  # Raises an exception for HTTP 4xx/5xx
 
-        #print("Response Received:\n", response.text)
-        return response.text,policy_number
+       
+        return response.text,policy_number,loss_date
 
     except requests.exceptions.RequestException as e:
-        #print(f"Error fetching policy details: {e}")
-        return None, policy_number
-
-
-import requests
-import json
-
-def validate_Duplicate_Claim(policy_number, cleaned_text):
-    """
-    Calls the Get Claim Details API.
-    - If the API clearly says no claims exist, returns None immediately.
-    - Otherwise, sends the data to AI for a deeper check.
-    - Returns dict with policyNumber, claimNumber, lossDate, and status='found' if found, else None.
-    """
-    try:
-        #print("\n[DEBUG] Starting duplicate claim validation...")
-        #print(f"[DEBUG] Input Policy Number: {policy_number}")
-        #print(f"[DEBUG] Cleaned Text (truncated): {cleaned_text[:200]}...")  # Avoid printing huge text
-
-        # 1️⃣ API Endpoint & Headers
-        url = "http://18.218.57.115:8090/cc/rest/claimdetails/v1/getClaimDetails"
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': 'Basic c3U6Z3c='
-        }
-        payload = {
-            "PolicyNumber": str(policy_number)
-        }
-     
-
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-
-        if response.status_code != 200:
-           # print(f"[ERROR] Get Claim API failed: {response.status_code} - {response.text}")
-            return None
-
-        try:
-            claim_data = response.json()
-           
-        except Exception as e:
-            
-            return None
-
-        # 2️⃣ Quick check before AI
-        if not claim_data or "no claim" in json.dumps(claim_data).lower():
-            print("[DEBUG] No claim data found in API response. Returning None.")
-            return None
-
-        # 3️⃣ Build AI prompt
-        prompt = f"""
-You are an professional claim validator. 
-You must strictly follow the instructions.
-
-Claim data from the API:
-{claim_data}
-
-User request text:
-{cleaned_text}
-
-### Your Task:
-1. Extract the **Loss Date** from {cleaned_text} and lets name as "RequestLossDate"   
-
-   RequestLossDate =  Loss Date: normalize it to this format → YYYY-MM-DDTHH:MM:SS-07:00  
-     (example: 2025-07-14T15:30:00-07:00). If time is missing, assume 00:00:00.  
-
-2. Here is the List of previous claim data {claim_data}. I want you to go through it thoroughly,verify if the 
-claim data has a claim details having "lossDate" = RequestLossDate. If found,
-extract the details of the latest claim as follows, return ONLY this JSON:  
-  
-    {{
-       "policyNumber": "<policyNumber from API>",
-       "claimNumber": "<claimNumber from API>",
-       "lossDate": "<lossDate from API>",
-       "claimStatus": "<claimStatus from API>",
-       "status": "duplicate"
-   }}
-3. Do not mark the status as duplicate if the loss Date is different.
-4. If Duplicate Claim is not found then return ONLY this JSON:  
-   {{
-       "status": "new"
-   }}
-
-### Rules:
-
-- Do not explain your reasoning.  
-- Do not output anything other than the JSON.  
-"""
-
-
-        # 4️⃣ Call AI
-       
-        ai_result = get_ai_content(prompt)
-        print("AI Result:", ai_result)
-
-        # 🛠 Clean AI output before parsing
-        try:
-            import re
-            cleaned_ai_result = re.sub(r"^```[a-zA-Z]*\s*|```$", "", ai_result.strip(), flags=re.MULTILINE).strip()
-            # print(f"[DEBUG] Cleaned AI Result: {cleaned_ai_result}")
-            result_json = json.loads(cleaned_ai_result)
-            # print(f"[DEBUG] Parsed AI JSON: {result_json}")
-        except Exception as e:
-            #print(f"[ERROR] Failed to parse AI output as JSON after cleaning: {e}")
-            result_json = None
-
-        return result_json
-
-    except Exception as e:
-        #print(f"[ERROR] Exception in validate_Duplicate_Claim: {e}")
-        return None
-
-
-
+        
+        return None, policy_number,loss_date
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
