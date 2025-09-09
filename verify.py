@@ -2,9 +2,8 @@ from datetime import datetime
 import requests
 import json
 
-
-# Function to validate claim based on policy number and loss date
-def validate_claim(policy_number, loss_date):
+# Function to validate claim based on policy number and loss date with a difference check
+def validate_claim(policy_number, loss_date, max_difference_hours=24):
     try:
         print(f"[DEBUG] Starting claim validation for PolicyNumber: {policy_number} and LossDate: {loss_date}")
 
@@ -42,9 +41,9 @@ def validate_claim(policy_number, loss_date):
         print(f"[DEBUG] Number of claims received: {len(claim_data)}")
 
         # Convert input loss_date to datetime for comparison
-        input_loss_date_obj = datetime.fromisoformat(loss_date.replace("Z", "+00:00")).date()
+        input_loss_date_obj = datetime.fromisoformat(loss_date.replace("Z", "+00:00"))
 
-        # Process claims to find the latest one matching the loss date
+        # Process claims to find the latest one matching the loss date within the threshold
         latest_claim = None
         latest_create_date = None
 
@@ -56,10 +55,13 @@ def validate_claim(policy_number, loss_date):
                 print("[DEBUG] Claim has no LossDate.")
                 continue
             
-            claim_loss_date = datetime.fromisoformat(claim_loss_date_str.replace("Z", "+00:00")).date()
+            claim_loss_date_obj = datetime.fromisoformat(claim_loss_date_str.replace("Z", "+00:00"))
+            difference = abs((claim_loss_date_obj - input_loss_date_obj).total_seconds()) / 3600  # Difference in hours
+            
+            print(f"[DEBUG] LossDate difference in hours: {difference:.2f}")
 
-            if claim_loss_date == input_loss_date_obj:
-                print(f"[DEBUG] LossDate matches: {claim_loss_date}")
+            if difference < max_difference_hours:
+                print(f"[DEBUG] LossDate within {max_difference_hours} hours: {claim_loss_date_str}")
                 create_dates = [exposure.get("CreateDate") for exposure in claim.get("Exposures", []) if exposure.get("CreateDate")]
                 print(f"[DEBUG] Found {len(create_dates)} create dates in exposures.")
                 
@@ -76,10 +78,11 @@ def validate_claim(policy_number, loss_date):
                             "PolicyType": claim.get("PolicyType"),
                             "ClaimStatus": claim.get("ClaimStatus"),
                             "PolicyNumber": claim.get("PolicyNumber"),
-                            "Status": "Duplicate"
+                            "Status": "Duplicate",
+                            "LossDateDifferenceHours": round(difference, 2)
                         }
             else:
-                print(f"[DEBUG] LossDate does not match: {claim_loss_date} vs {input_loss_date_obj}")
+                print(f"[DEBUG] LossDate difference too large: {claim_loss_date_str}")
 
         if not latest_claim:
             print("[DEBUG] No matching claims found.")
@@ -91,7 +94,6 @@ def validate_claim(policy_number, loss_date):
     except requests.exceptions.RequestException as e:
         print(f"[ERROR] API request exception occurred: {e}")
         return None
-
 
 # Function to call AI service to verifuy duplicate claims
 def validate_Duplicate_Claim(policy_number, cleaned_text):
